@@ -30,6 +30,8 @@ logging.basicConfig(
 
 SIGNET_HEADER = b"\xec\xc7\xda\xa2"
 PSBT_SIGNET_BLOCK = b"\xfc\x06signetb"    # proprietary PSBT global field holding the block being signed
+VERSION_HEADER_V2_FLAG = 0x80000000
+
 RE_MULTIMINER = re.compile(r"^(\d+)(-(\d+))?/(\d+)$")
 
 def signet_txs(block, challenge):
@@ -101,6 +103,14 @@ def generate_psbt(tmpl, reward_spk, *, blocktime=None, poolid=None):
     if poolid is not None:
         scriptSig = CScript(b"" + scriptSig + CScriptOp.encode_op_pushdata(poolid))
 
+    # The activation block's coinbase must contain the agreed headline, and
+    # consensus looks for it as a byte substring of the scriptSig. The node
+    # puts it in the template only for that one block, so this is a no-op
+    # everywhere else.
+    headline = tmpl.get("coinbaseaux", {}).get("blake2b_headline")
+    if headline:
+        scriptSig = CScript(b"" + scriptSig + CScriptOp.encode_op_pushdata(bytes.fromhex(headline)))
+
     cbtx = CTransaction()
     cbtx.vin = [CTxIn(COutPoint(0, 0xffffffff), scriptSig, 0xffffffff)]
     cbtx.vout = [CTxOut(tmpl["coinbasevalue"], reward_spk)]
@@ -108,7 +118,11 @@ def generate_psbt(tmpl, reward_spk, *, blocktime=None, poolid=None):
     cbtx.rehash()
 
     block = CBlock()
-    block.nVersion = tmpl["version"]
+    # Bit 31 of the version on the wire is the header format flag, not part of
+    # the version number. Knots keeps the two apart — the flag in m_header_v2,
+    # the version with it masked off — and re-applies it when serializing, so
+    # anything that reads nVersion as a signed 32-bit value still works.
+    block.nVersion = tmpl["version"] & ~VERSION_HEADER_V2_FLAG
     block.hashPrevBlock = int(tmpl["previousblockhash"], 16)
     block.nTime = tmpl["curtime"] if blocktime is None else blocktime
     if block.nTime < tmpl["mintime"]:
@@ -116,6 +130,16 @@ def generate_psbt(tmpl, reward_spk, *, blocktime=None, poolid=None):
     block.nBits = int(tmpl["bits"], 16)
     block.nNonce = 0
     block.vtx = [cbtx] + [tx_from_hex(t["data"]) for t in tmpl["transactions"]]
+
+    # A block at or above the activation height must carry a version 2 header.
+    # The template says so by putting "!blake2b" in its rules, which the node
+    # only serves to a client that asked for the rule by name.
+    if tmpl["version"] & VERSION_HEADER_V2_FLAG or "!blake2b" in tmpl.get("rules", []):
+        block.m_header_v2 = True
+        # Both are consensus-enforced: the height must be the parent's plus
+        # one, and the count must match the block's transactions.
+        block.m_height = tmpl["height"]
+        block.m_txcount = len(block.vtx)
 
     witnonce = 0
     witroot = block.calc_witness_merkle_root()
@@ -306,7 +330,7 @@ class Generate:
         self.action_time = max(self.action_time, self.mine_time - 6900)
 
     def gbt(self, bcli, bestblockhash, now):
-        tmpl = json.loads(bcli("getblocktemplate", '{"rules":["signet","segwit"]}'))
+        tmpl = json.loads(bcli("getblocktemplate", '{"rules":["signet","segwit","blake2b"]}'))
         if tmpl["previousblockhash"] != bestblockhash:
             logging.warning("GBT based off unexpected block (%s not %s), retrying", tmpl["previousblockhash"], bci["bestblockhash"])
             time.sleep(1)
