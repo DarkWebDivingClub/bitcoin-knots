@@ -48,6 +48,19 @@ void ReadSigNetArgs(const ArgsManager& args, CChainParams::SigNetOptions& option
         }
         options.pow_target_spacing = *signetblocktime;
     }
+    if (args.IsArgSet("-signetblake2bheight")) {
+        if (!args.IsArgSet("-signetchallenge")) {
+            // The default signet is somebody else's chain. Scheduling a
+            // hardfork on it from the command line would produce a node that
+            // silently disagrees with every other node on that network.
+            throw std::runtime_error("-signetblake2bheight cannot be set without -signetchallenge");
+        }
+        const int64_t height{args.GetIntArg("-signetblake2bheight", 0)};
+        if (height < 1 || height >= std::numeric_limits<int>::max()) {
+            throw std::runtime_error("-signetblake2bheight must be at least 1");
+        }
+        options.blake2b_height = int(height);
+    }
 }
 
 void ReadRegTestArgs(const ArgsManager& args, CChainParams::RegTestOptions& options)
