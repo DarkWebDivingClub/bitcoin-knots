@@ -247,12 +247,18 @@ def seconds_to_hms(s):
     return out
 
 class Generate:
-    INTERVAL = 600.0*2016/2015 # 10 minutes, adjusted for the off-by-one bug
-
+    # 10 minutes, adjusted for the off-by-one bug. A custom signet can target
+    # a different spacing with -signetblocktime, in which case the miner has
+    # to be told the same value: it paces itself from this, and the node's
+    # difficulty adjustment expects blocks to arrive at that rate.
+    DEFAULT_BLOCK_INTERVAL = 600.0
 
     def __init__(self, multiminer=None, ultimate_target=None, poisson=False, max_interval=1800,
                  standby_delay=0, backup_delay=0, set_block_time=None,
-                 poolid=None):
+                 poolid=None, block_interval=None):
+        if block_interval is None:
+            block_interval = self.DEFAULT_BLOCK_INTERVAL
+        self.INTERVAL = block_interval * 2016 / 2015
         if multiminer is None:
             multiminer = (0, 1, 1)
         (self.multi_low, self.multi_high, self.multi_period) = multiminer
@@ -410,6 +416,7 @@ def do_generate(args):
     ultimate_target = nbits_to_target(int(args.nbits,16))
 
     gen = Generate(multiminer=my_blocks, ultimate_target=ultimate_target, poisson=args.poisson, max_interval=args.max_interval,
+                   block_interval=args.block_interval,
                    standby_delay=args.standby_delay, backup_delay=args.backup_delay, set_block_time=args.set_block_time, poolid=poolid)
 
     mined_blocks = 0
@@ -553,6 +560,7 @@ def main():
     generate.add_argument("--backup-delay", default=300, type=int, help="Seconds to delay before mining blocks reserved for other miners (default=300)")
     generate.add_argument("--standby-delay", default=0, type=int, help="Seconds to delay before mining blocks (default=0)")
     generate.add_argument("--max-interval", default=1800, type=int, help="Maximum interblock interval (seconds)")
+    generate.add_argument("--block-interval", default=600, type=int, help="Target interblock interval (seconds); match the chain's -signetblocktime")
 
     calibrate = cmds.add_parser("calibrate", help="Calibrate difficulty")
     calibrate.set_defaults(fn=do_calibrate)
